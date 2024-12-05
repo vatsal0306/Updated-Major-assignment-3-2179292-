@@ -11,7 +11,7 @@ const svg = d3.select("#visualization")
 
 const zoomGroup = svg.append("g");
 
-d3.json("author_network_data_with_links.json").then(data => {
+d3.json("author_network.json").then(data => {
     console.log("Data loaded:", data);
 
     const degreeMap = {};
