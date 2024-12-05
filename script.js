@@ -1,101 +1,149 @@
-const dataUrl = 'data_scopus.csv';
+const width = window.innerWidth;
+const height = window.innerHeight;
 
-d3.json(dataUrl).then(data => {
-    // Filter and prepare data
-    const nodes = data.nodes.filter(d => d.year && d.affiliation && d.name);
-    const links = data.links;
+const svg = d3.select("#visualization")
+    .append("svg")
+    .attr("width", width)
+    .attr("height", height)
+    .call(d3.zoom().on("zoom", (event) => {
+        zoomGroup.attr("transform", event.transform);
+    }));
 
-    // Extract top 10 countries by affiliation
-    const affiliationCount = d3.rollup(nodes, v => v.length, d => d.country);
-    const topCountries = Array.from(affiliationCount.keys())
-        .sort((a, b) => affiliationCount.get(b) - affiliationCount.get(a))
-        .slice(0, 10);
+const zoomGroup = svg.append("g");
 
-    // Define color scale for the top 10 countries
-    const colorScale = d3.scaleOrdinal()
-        .domain(topCountries)
-        .range(d3.schemeCategory10)
-        .unknown("#A9A9A9");
+d3.json("author_network_data_with_links.json").then(data => {
+    console.log("Data loaded:", data);
 
-    // Set up SVG dimensions
-    const svg = d3.select("#graph");
-    const width = +svg.attr("width");
-    const height = +svg.attr("height");
+    const degreeMap = {};
+    data.links.forEach(link => {
+        degreeMap[link.source] = (degreeMap[link.source] || 0) + 1;
+        degreeMap[link.target] = (degreeMap[link.target] || 0) + 1;
+    });
 
-    // Define radius scale based on degree
-    const radiusScale = d3.scaleSqrt()
-        .domain([1, d3.max(nodes, d => d.degree)])
+    data.nodes.forEach(node => {
+        node.degree = degreeMap[node.name] || 0;
+    });
+
+    const sizeScale = d3.scaleSqrt()
+        .domain(d3.extent(data.nodes, d => d.degree))
         .range([3, 12]);
 
-    // Tooltip div
-    const tooltip = d3.select("#tooltip");
+    const countries = Array.from(new Set(data.nodes.map(d => d.country)));
+    const colorScale = d3.scaleOrdinal(d3.schemeCategory10).domain(countries);
 
-    // Initialize force simulation
-    const simulation = d3.forceSimulation(nodes)
-        .force("link", d3.forceLink(links).id(d => d.id).strength(0.5))
+    const simulation = d3.forceSimulation(data.nodes)
+        .force("link", d3.forceLink(data.links).id(d => d.name).strength(0.5))
         .force("charge", d3.forceManyBody().strength(-30))
-        .force("collide", d3.forceCollide().radius(d => radiusScale(d.degree) + 3))
-        .force("center", d3.forceCenter(width / 2, height / 2));
+        .force("center", d3.forceCenter(width / 2, height / 2))
+        .force("collide", d3.forceCollide().radius(d => sizeScale(d.degree) + 2)); 
 
-    // Add links
-    const link = svg.append("g")
-        .attr("class", "links")
+    const link = zoomGroup.append("g")
         .selectAll("line")
-        .data(links)
-        .enter().append("line")
-        .attr("stroke", "#aaa");
+        .data(data.links)
+        .enter()
+        .append("line")
+        .attr("stroke", "#999")
+        .attr("stroke-opacity", 0.6)
+        .attr("stroke-width", 1.5);
 
-    // Add nodes
-    const node = svg.append("g")
-        .attr("class", "nodes")
+    const node = zoomGroup.append("g")
         .selectAll("circle")
-        .data(nodes)
-        .enter().append("circle")
-        .attr("r", d => radiusScale(d.degree))
+        .data(data.nodes)
+        .enter()
+        .append("circle")
+        .attr("r", d => sizeScale(d.degree))  
         .attr("fill", d => colorScale(d.country))
+        .call(drag(simulation));
+
+    const tooltip = d3.select("body").append("div")
+        .attr("class", "tooltip")
+        .style("position", "absolute")
+        .style("background-color", "white")
+        .style("border", "solid")
+        .style("border-width", "1px")
+        .style("padding", "10px")
+        .style("display", "none");
+
+    node
         .on("mouseover", (event, d) => {
-            const affiliation = d.affiliation;
-            node.style("opacity", node => node.affiliation === affiliation ? 1 : 0.2);
+            tooltip.style("display", "block")
+                .html(`<strong>${d.name}</strong><br>Country: ${d.country}<br>Connections: ${d.degree}`);
+            node.attr("opacity", n => n.country === d.country ? 1 : 0.2);
         })
-        .on("mouseleave", () => {
-            node.style("opacity", 1);
+        .on("mousemove", event => {
+            tooltip.style("top", (event.pageY + 5) + "px")
+                .style("left", (event.pageX + 5) + "px");
+        })
+        .on("mouseout", () => {
+            tooltip.style("display", "none");
+            node.attr("opacity", 1);
         })
         .on("click", (event, d) => {
-            tooltip.style("left", (event.pageX + 5) + "px")
-                .style("top", (event.pageY - 5) + "px")
-                .style("opacity", 1)
-                .html(`<strong>Name:</strong> ${d.name}<br>
-                       <strong>Affiliation:</strong> ${d.affiliation}<br>
-                       <strong>Country:</strong> ${d.country}`);
+            tooltip.style("display", "block")
+                .html(`<strong>${d.name}</strong><br>Country: ${d.country}<br>Affiliation: ${d.affiliation || "Not available"}`)
+                .style("top", (event.pageY + 5) + "px")
+                .style("left", (event.pageX + 5) + "px");
         });
 
-    // Hide tooltip on outside click
-    svg.on("click", () => tooltip.style("opacity", 0));
-
-    // Update node and link positions during simulation
     simulation.on("tick", () => {
-        link.attr("x1", d => d.source.x)
+        link
+            .attr("x1", d => d.source.x)
             .attr("y1", d => d.source.y)
             .attr("x2", d => d.target.x)
             .attr("y2", d => d.target.y);
 
-        node.attr("cx", d => d.x)
+        node
+            .attr("cx", d => d.x)
             .attr("cy", d => d.y);
     });
 
-    // Control sliders
-    d3.select("#chargeStrength").on("input", function () {
+    const legendContainer = d3.select(".legend");
+
+    legendContainer.selectAll(".legend-item").remove();
+
+    countries.forEach(country => {
+        const legendItem = legendContainer.append("div").attr("class", "legend-item");
+
+        legendItem.append("div")
+            .style("background-color", country === "Other" ? "#A9A9A9" : colorScale(country))
+            .style("width", "15px")
+            .style("height", "15px")
+            .style("display", "inline-block")
+            .style("margin-right", "10px");
+
+        legendItem.append("span").text(country);
+    });
+
+    d3.select("#forceStrength").on("input", function() {
         simulation.force("charge").strength(+this.value);
         simulation.alpha(1).restart();
     });
 
-    d3.select("#linkStrength").on("input", function () {
-        simulation.force("link").strength(+this.value);
+    d3.select("#collisionRadius").on("input", function() {
+        simulation.force("collide").radius(d => sizeScale(d.degree) + +this.value);
         simulation.alpha(1).restart();
     });
 
-    d3.select("#collisionRadius").on("input", function () {
-        simulation.force("collide").radius(+this.value);
+    d3.select("#linkStrength").on("input", function() {
+        simulation.force("link").strength(+this.value);
         simulation.alpha(1).restart();
     });
-});
+}).catch(error => console.error("Error loading data:", error));
+
+function drag(simulation) {
+    return d3.drag()
+        .on("start", event => {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            event.subject.fx = event.subject.x;
+            event.subject.fy = event.subject.y;
+        })
+        .on("drag", event => {
+            event.subject.fx = event.x;
+            event.subject.fy = event.y;
+        })
+        .on("end", event => {
+            if (!event.active) simulation.alphaTarget(0);
+            event.subject.fx = null;
+            event.subject.fy = null;
+        });
+}
