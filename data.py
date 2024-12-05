@@ -46,5 +46,5 @@ nodes = [
 graph_data = {"nodes": nodes, "links": links}
 
 # Save JSON data
-with open("author_network.json", "w") as f:
+with open("author_network1.json", "w") as f:
     json.dump(graph_data, f)
